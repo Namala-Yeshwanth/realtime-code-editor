@@ -1,14 +1,63 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import Client from '../components/Client.js';
 import Editor from '../components/editor.js';
+import { initSocket } from '../socket.js';
+
+import ACTIONS from '../Actions.js';
+import toast from 'react-hot-toast';
+import { useLocation, useNavigate, Navigate, useParams } from 'react-router-dom';
+
 
 const EditorPage = ()=>{
+    const socketRef = useRef(null);
+    const location = useLocation();
+    const {roomId} = useParams();
+    
+    const reactNavigator = useNavigate();  //to not get error i'm giving a diff name other than navigate
+    
+    // change of useState => will re-render but change of useRef will not re-render 
+    const [clients, setClients] = useState([]);
 
-    const [clients, setClients] = useState([
-        {socketId: 1, username: 'Yeshwanth N'},
-        {socketId: 2, username: 'Bunny K'},
-        {socketId: 3, username: 'Bunny K'}
-    ]);
+
+    useEffect(()=>{
+        const init = async () =>{
+            // below code to connect client to server
+            socketRef.current = await initSocket();
+            socketRef.current.on('connect_error', (err)=> handleErrors(err));
+            socketRef.current.on('connect_failed', (err)=> handleErrors(err));
+
+
+            function handleErrors(e) {
+                console.log('socket errors', e);
+                toast.error('Socket connection failed, try again later.');
+                reactNavigator('/');  //redirect to homepage
+            }
+
+            // here we are able to use await because in socket.js, we written async func, so it returns promise function
+            // below code to send username to editorpage
+            socketRef.current.emit(ACTIONS.JOIN, {
+                roomId,
+                username: location.state?.username,
+            });
+
+            // Listening for joined event
+            socketRef.current.on(ACTIONS.JOINED, ({clients, username, socketId}) => {
+                if(username!== location.state?.username){
+                    // notify others except current user(me)
+                    toast.success(`${username} Joined the room..`);
+                    console.log(`${username} joined`); 
+                }
+                setClients(clients);
+            });
+
+        };
+        init();
+    },[]);  //if we didn't give [] then it will call for everything
+
+
+    if(!location.state){
+        return <Navigate to="/"/>
+    }
 
     return (
         <div className='mainWrap'>
