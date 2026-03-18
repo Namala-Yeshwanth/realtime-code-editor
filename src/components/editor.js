@@ -5,51 +5,25 @@ import 'codemirror/theme/dracula.css';
 import 'codemirror/mode/javascript/javascript';
 import 'codemirror/addon/edit/closetag';
 import 'codemirror/addon/edit/closebrackets';
-import * as Y from 'yjs';
-import { CodemirrorBinding } from 'y-codemirror';
-import { SocketIOProvider } from 'y-socket.io';
+import ACTIONS from "../Actions";
 
-// Each user gets a random bright color for their cursor
 const COLORS = [
     '#F44336', '#E91E63', '#9C27B0', '#3F51B5',
     '#2196F3', '#00BCD4', '#4CAF50', '#FF9800',
-    '#FF5722', '#607D8B',
 ];
-const getRandomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
+const getColor = (name) => COLORS[
+    [...name].reduce((acc, c) => acc + c.charCodeAt(0), 0) % COLORS.length
+];
 
 const Editor = ({ socketRef, roomId, onCodeChange, username }) => {
     const textareaRef = useRef(null);
     const editorRef = useRef(null);
+    // Track remote cursors: socketId -> { cursor, color, label element }
+    const cursorsRef = useRef({});
 
     useEffect(() => {
         if (!textareaRef.current || editorRef.current) return;
 
-        // 1. Create a Yjs document — one per room session
-        const ydoc = new Y.Doc();
-
-        // 2. Connect Yjs to the server via your existing Socket.IO connection.
-        //    We pass the already-connected socket so Yjs reuses it — no second connection.
-        const provider = new SocketIOProvider(
-            process.env.REACT_APP_BACKEND_URL || window.location.origin,
-            roomId,
-            ydoc,
-            {
-                autoConnect: true,
-                // Pass the existing socket so Yjs reuses it
-                socket: socketRef.current,
-            }
-        );
-
-        // 3. Set this user's awareness info (shown as cursor label)
-        provider.awareness.setLocalStateField('user', {
-            name: username,
-            color: getRandomColor(),
-        });
-
-        // 4. The shared text that all users edit together
-        const ytext = ydoc.getText('codemirror');
-
-        // 5. Init CodeMirror
         editorRef.current = Codemirror.fromTextArea(textareaRef.current, {
             mode: { name: 'javascript', json: true },
             theme: 'dracula',
@@ -58,33 +32,146 @@ const Editor = ({ socketRef, roomId, onCodeChange, username }) => {
             lineNumbers: true,
         });
 
-        // 6. Bind Yjs ↔ CodeMirror.
-        //    This single binding handles ALL of:
-        //    - syncing content between users (CRDT, no conflicts)
-        //    - showing remote cursors with name labels
-        //    - syncing state to new joiners automatically
-        const binding = new CodemirrorBinding(
-            ytext,
-            editorRef.current,
-            provider.awareness
-        );
-
-        // 7. Keep onCodeChange updated so EditorPage's codeRef stays in sync
-        editorRef.current.on('change', (instance) => {
-            onCodeChange(instance.getValue());
-        });
-
-        // Cleanup on unmount
         return () => {
-            binding.destroy();
-            provider.destroy();
-            ydoc.destroy();
             if (editorRef.current) {
                 editorRef.current.toTextArea();
                 editorRef.current = null;
             }
         };
     }, []);
+
+    useEffect(() => {
+        if (!socketRef.current) return;
+
+        const userColor = getColor(username || 'user');
+
+        // ---- Outgoing: broadcast code + my cursor position ----
+        const handleChange = (instance, changes) => {
+            const { origin } = changes;
+            const code = instance.getValue();
+            onCodeChange(code);
+            if (origin !== 'setValue') {
+                socketRef.current.emit(ACTIONS.CODE_CHANGE, {
+                    roomId,
+                    code,
+                    cursor: instance.getCursor(),
+                    username,
+                    color: userColor,
+                });
+            }
+        };
+        editorRef.current.on('change', handleChange);
+
+        // Broadcast cursor movement even without typing
+        const handleCursorActivity = (instance) => {
+            if (!socketRef.current) return;
+            socketRef.current.emit(ACTIONS.CURSOR_MOVE, {
+                roomId,
+                cursor: instance.getCursor(),
+                username,
+                color: userColor,
+            });
+        };
+        editorRef.current.on('cursorActivity', handleCursorActivity);
+
+        // ---- Incoming: receive code changes ----
+        const handleCodeChange = ({ code, cursor, username: remoteUser, color, socketId }) => {
+            if (!editorRef.current || code === null) return;
+
+            const currentCode = editorRef.current.getValue();
+            if (currentCode === code) return;
+
+            // Save my own cursor before overwriting
+            const myCursor = editorRef.current.getCursor();
+            editorRef.current.setValue(code);
+            editorRef.current.setCursor(myCursor);
+
+            // Show remote user's cursor
+            if (cursor && socketId) {
+                showRemoteCursor(socketId, cursor, remoteUser, color);
+            }
+        };
+
+        // ---- Incoming: receive cursor movements ----
+        const handleCursorMove = ({ cursor, username: remoteUser, color, socketId }) => {
+            if (!editorRef.current || !socketId) return;
+            showRemoteCursor(socketId, cursor, remoteUser, color);
+        };
+
+        // ---- Incoming: remove cursor when user leaves ----
+        const handleDisconnected = ({ socketId }) => {
+            removeRemoteCursor(socketId);
+        };
+
+        socketRef.current.on(ACTIONS.CODE_CHANGE, handleCodeChange);
+        socketRef.current.on(ACTIONS.CURSOR_MOVE, handleCursorMove);
+        socketRef.current.on(ACTIONS.DISCONNECTED, handleDisconnected);
+
+        return () => {
+            if (editorRef.current) {
+                editorRef.current.off('change', handleChange);
+                editorRef.current.off('cursorActivity', handleCursorActivity);
+            }
+            if (socketRef.current) {
+                socketRef.current.off(ACTIONS.CODE_CHANGE, handleCodeChange);
+                socketRef.current.off(ACTIONS.CURSOR_MOVE, handleCursorMove);
+                socketRef.current.off(ACTIONS.DISCONNECTED, handleDisconnected);
+            }
+        };
+    }, [socketRef.current]);
+
+    // ---- Draw a remote cursor bookmark in CodeMirror ----
+    function showRemoteCursor(socketId, cursor, remoteUser, color) {
+        const editor = editorRef.current;
+        if (!editor) return;
+
+        // Remove old cursor for this user
+        removeRemoteCursor(socketId);
+
+        // Create label element
+        const label = document.createElement('span');
+        label.className = 'remote-cursor-label';
+        label.textContent = remoteUser;
+        label.style.cssText = `
+            background: ${color};
+            color: #fff;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 1px 4px;
+            border-radius: 3px;
+            position: absolute;
+            top: -18px;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 99;
+        `;
+
+        // Create caret element
+        const caret = document.createElement('span');
+        caret.className = 'remote-cursor-caret';
+        caret.style.cssText = `
+            border-left: 2px solid ${color};
+            height: 18px;
+            display: inline-block;
+            position: relative;
+        `;
+        caret.appendChild(label);
+
+        // Place bookmark at remote cursor position
+        const bookmark = editor.setBookmark(
+            { line: cursor.line, ch: cursor.ch },
+            { widget: caret, insertLeft: true }
+        );
+
+        cursorsRef.current[socketId] = bookmark;
+    }
+
+    function removeRemoteCursor(socketId) {
+        if (cursorsRef.current[socketId]) {
+            cursorsRef.current[socketId].clear();
+            delete cursorsRef.current[socketId];
+        }
+    }
 
     return <textarea ref={textareaRef}></textarea>;
 };

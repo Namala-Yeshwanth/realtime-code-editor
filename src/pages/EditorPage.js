@@ -11,7 +11,6 @@ const EditorPage = () => {
     const codeRef = useRef(null);
     const location = useLocation();
     const { roomId } = useParams();
-
     const reactNavigator = useNavigate();
     const [clients, setClients] = useState([]);
     const isInitialized = useRef(false);
@@ -42,10 +41,13 @@ const EditorPage = () => {
             socket.on(ACTIONS.JOINED, ({ clients, username, socketId }) => {
                 if (username !== location.state?.username) {
                     toast.success(`${username} Joined the room..`);
-                    console.log(`${username} joined`);
                 }
                 setClients(clients);
-                // SYNC_CODE removed — Yjs handles new joiner sync automatically
+                // Sync existing code to the newly joined client
+                socket.emit(ACTIONS.SYNC_CODE, {
+                    code: codeRef.current,
+                    socketId,
+                });
             });
 
             socket.on(ACTIONS.DISCONNECTED, ({ socketId, username }) => {
@@ -116,7 +118,6 @@ const EditorPage = () => {
                 <button className='btn leaveBtn' onClick={leaveRoom}>Leave</button>
             </div>
             <div className='editorWrap'>
-                {/* Pass username so Yjs can label this user's cursor */}
                 <Editor
                     socketRef={socketRef}
                     roomId={roomId}

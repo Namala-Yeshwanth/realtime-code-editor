@@ -3,16 +3,13 @@ const app = express();
 const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
-const { setupWSConnection } = require('y-socket.io/dist/server');
 const ACTIONS = require('./src/Actions');
 
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Serve the React build folder
+// Serve React build
 app.use(express.static(path.join(__dirname, 'build')));
-
-// For any route that is not a socket route, serve the React app
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
@@ -31,10 +28,6 @@ function getAllConnectedClients(roomId) {
 io.on('connection', (socket) => {
     console.log('socket connected', socket.id);
 
-    // Hand off this socket to Yjs — it will handle all document sync,
-    // conflict resolution, and cursor awareness automatically
-    setupWSConnection(socket);
-
     socket.on(ACTIONS.JOIN, ({ roomId, username }) => {
         userSocketMap[socket.id] = username;
         socket.join(roomId);
@@ -48,13 +41,34 @@ io.on('connection', (socket) => {
         });
     });
 
-    // CODE_CHANGE and SYNC_CODE are no longer needed —
-    // Yjs handles all content sync internally.
-    // Keeping them commented out for reference.
-    // socket.on(ACTIONS.CODE_CHANGE, ...);
-    // socket.on(ACTIONS.SYNC_CODE, ...);
+    // Broadcast code change to everyone else in the room,
+    // and include socketId so receiver can render the remote cursor
+    socket.on(ACTIONS.CODE_CHANGE, ({ roomId, code, cursor, username, color }) => {
+        socket.in(roomId).emit(ACTIONS.CODE_CHANGE, {
+            code,
+            cursor,
+            username,
+            color,
+            socketId: socket.id,
+        });
+    });
 
-    // Explicit leave via button click — notify others immediately
+    // Sync full code to a newly joined client
+    socket.on(ACTIONS.SYNC_CODE, ({ socketId, code }) => {
+        io.to(socketId).emit(ACTIONS.CODE_CHANGE, { code });
+    });
+
+    // Broadcast cursor movement (no code change, just cursor)
+    socket.on(ACTIONS.CURSOR_MOVE, ({ roomId, cursor, username, color }) => {
+        socket.in(roomId).emit(ACTIONS.CURSOR_MOVE, {
+            cursor,
+            username,
+            color,
+            socketId: socket.id,
+        });
+    });
+
+    // Explicit leave via button
     socket.on(ACTIONS.LEAVE, ({ roomId, username }) => {
         socket.in(roomId).emit(ACTIONS.DISCONNECTED, {
             socketId: socket.id,
@@ -64,7 +78,7 @@ io.on('connection', (socket) => {
         socket.leave(roomId);
     });
 
-    // Handles tab close / network drop — natural disconnect
+    // Tab close / network drop
     socket.on('disconnecting', () => {
         const rooms = [...socket.rooms];
         rooms.forEach((roomId) => {
