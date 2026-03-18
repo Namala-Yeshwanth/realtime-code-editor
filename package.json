@@ -8,7 +8,8 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^13.5.0",
     "codemirror": "^5.65.21",
-    "express": "^5.2.1",
+    "cors": "^2.8.6",
+    "express": "^4.18.2",
     "nodemon": "^3.1.14",
     "react": "^19.2.4",
     "react-avatar": "^5.0.4",
@@ -22,7 +23,8 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "start:front": "react-scripts start",
+    "start": "npm run build && npm run server:prod",
     "build": "react-scripts build",
     "server:dev": "nodemon server.js",
     "server:prod": "node server.js",

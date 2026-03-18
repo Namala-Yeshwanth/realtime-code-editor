@@ -1,9 +1,9 @@
 .homePageWrapper{
-  height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
+  height: 100vh;
 }
 
 .formWrapper{
@@ -135,14 +135,17 @@ footer a:hover {
 }
 
 .leaveBtn {
-  margin-top: 20px;
   width: 100%;
+  margin-top: 20px;
 }
 
 .CodeMirror {
-  /* min-height: calc(100vh - 20px); */
-  min-height: 100vh;
+  min-height: calc(100vh - 20px);
   font-size: 20px;
   line-height: 1.6;
   padding-top: 20px;
+}
+
+#realtimeEditor {
+  display: none;
 }

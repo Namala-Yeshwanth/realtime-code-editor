@@ -76,7 +76,7 @@ const HomePage = ()=>{
                 </h4>
             </footer>
         </div>
-    )
+    );
 };
 
 export default HomePage;

@@ -1,8 +1,8 @@
 import './App.css';
 import {BrowserRouter, Routes, Route} from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 import HomePage from './pages/HomePage';
 import EditorPage from './pages/EditorPage';
-import { Toaster } from 'react-hot-toast';
 
 function App() {
   return (
@@ -14,15 +14,16 @@ function App() {
             success: {
               theme: {
                 primary: '#4aed88',
-              }
-            }
-          }}></Toaster>
+              },
+            },
+          }}
+        ></Toaster>
       </div>
       
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<HomePage/>}></Route>
-          <Route path='/editor/:roomId' element={<EditorPage/>}></Route>
+          <Route path='/editor/:roomId' element={<EditorPage />}></Route>
         </Routes>
       </BrowserRouter>
     </>
