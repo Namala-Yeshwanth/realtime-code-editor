@@ -1,42 +1,46 @@
 const express = require('express');
 const app = express();
 const http = require('http');
-const { Server } = require('socket.io');
-const ACTIONS = require('./src/Actions');
 const path = require('path');
+const { Server } = require('socket.io');
+const { setupWSConnection } = require('y-socket.io/dist/server');
+const ACTIONS = require('./src/Actions');
 
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static('build'));
-// as we launch from backend and in backend we don't have editor/..
-// so added this so that when we refresh it doesn't give error 
-app.use((req, res, next)=> {
+// Serve the React build folder
+app.use(express.static(path.join(__dirname, 'build')));
+
+// For any route that is not a socket route, serve the React app
+app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
 const userSocketMap = {};
+
 function getAllConnectedClients(roomId) {
-    // Map
     return Array.from(io.sockets.adapter.rooms.get(roomId) || []).map(
-        (socketId)=>{
-            return {
-                socketId,
-                username: userSocketMap[socketId],
-            };
-        }
+        (socketId) => ({
+            socketId,
+            username: userSocketMap[socketId],
+        })
     );
 }
 
-io.on('connection', (socket) =>{
+io.on('connection', (socket) => {
     console.log('socket connected', socket.id);
 
-    socket.on(ACTIONS.JOIN, ({roomId, username}) => {
+    // Hand off this socket to Yjs — it will handle all document sync,
+    // conflict resolution, and cursor awareness automatically
+    setupWSConnection(socket);
+
+    socket.on(ACTIONS.JOIN, ({ roomId, username }) => {
         userSocketMap[socket.id] = username;
         socket.join(roomId);
         const clients = getAllConnectedClients(roomId);
-        clients.forEach(({socketId})=>{
-            io.to(socketId).emit(ACTIONS.JOINED,{
+        clients.forEach(({ socketId }) => {
+            io.to(socketId).emit(ACTIONS.JOINED, {
                 clients,
                 username,
                 socketId: socket.id,
@@ -44,13 +48,11 @@ io.on('connection', (socket) =>{
         });
     });
 
-    socket.on(ACTIONS.CODE_CHANGE, ({roomId, code})=> {
-        socket.in(roomId).emit(ACTIONS.CODE_CHANGE, {code});
-    });
-
-    socket.on(ACTIONS.SYNC_CODE, ({socketId, code})=> {
-        io.to(socketId).emit(ACTIONS.CODE_CHANGE, {code});
-    });
+    // CODE_CHANGE and SYNC_CODE are no longer needed —
+    // Yjs handles all content sync internally.
+    // Keeping them commented out for reference.
+    // socket.on(ACTIONS.CODE_CHANGE, ...);
+    // socket.on(ACTIONS.SYNC_CODE, ...);
 
     // Explicit leave via button click — notify others immediately
     socket.on(ACTIONS.LEAVE, ({ roomId, username }) => {
@@ -62,18 +64,19 @@ io.on('connection', (socket) =>{
         socket.leave(roomId);
     });
 
-    socket.on('disconnecting', ()=>{
+    // Handles tab close / network drop — natural disconnect
+    socket.on('disconnecting', () => {
         const rooms = [...socket.rooms];
-        rooms.forEach((roomId)=>{
+        rooms.forEach((roomId) => {
             socket.in(roomId).emit(ACTIONS.DISCONNECTED, {
                 socketId: socket.id,
-                username: userSocketMap[socket.id],  // username still exists here ✓
+                username: userSocketMap[socket.id],
             });
         });
-        delete userSocketMap[socket.id];  // delete AFTER emitting, not before ✓
+        delete userSocketMap[socket.id];
         socket.leave();
     });
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, ()=> console.log(`Listening on port ${PORT}`));
+server.listen(PORT, () => console.log(`Listening on port ${PORT}`));

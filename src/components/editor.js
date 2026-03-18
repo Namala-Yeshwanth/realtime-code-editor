@@ -5,76 +5,86 @@ import 'codemirror/theme/dracula.css';
 import 'codemirror/mode/javascript/javascript';
 import 'codemirror/addon/edit/closetag';
 import 'codemirror/addon/edit/closebrackets';
-import ACTIONS from "../Actions";
+import * as Y from 'yjs';
+import { CodemirrorBinding } from 'y-codemirror';
+import { SocketIOProvider } from 'y-socket.io';
 
-const Editor = ({ socketRef, roomId, onCodeChange }) => {
+// Each user gets a random bright color for their cursor
+const COLORS = [
+    '#F44336', '#E91E63', '#9C27B0', '#3F51B5',
+    '#2196F3', '#00BCD4', '#4CAF50', '#FF9800',
+    '#FF5722', '#607D8B',
+];
+const getRandomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
 
+const Editor = ({ socketRef, roomId, onCodeChange, username }) => {
     const textareaRef = useRef(null);
     const editorRef = useRef(null);
 
-    // Effect 1: Initialize the CodeMirror editor once
     useEffect(() => {
         if (!textareaRef.current || editorRef.current) return;
 
-        editorRef.current = Codemirror.fromTextArea(
-            textareaRef.current,
+        // 1. Create a Yjs document — one per room session
+        const ydoc = new Y.Doc();
+
+        // 2. Connect Yjs to the server via your existing Socket.IO connection.
+        //    We pass the already-connected socket so Yjs reuses it — no second connection.
+        const provider = new SocketIOProvider(
+            process.env.REACT_APP_BACKEND_URL || window.location.origin,
+            roomId,
+            ydoc,
             {
-                mode: { name: 'javascript', json: true },
-                theme: 'dracula',
-                autoCloseTags: true,
-                autoCloseBrackets: true,
-                lineNumbers: true,
+                autoConnect: true,
+                // Pass the existing socket so Yjs reuses it
+                socket: socketRef.current,
             }
         );
 
-        // Listen for local user typing and broadcast it
-        editorRef.current.on('change', (instance, changes) => {
-            const { origin } = changes;
-            const code = instance.getValue();
-            onCodeChange(code);
-            if (origin !== 'setValue' && socketRef.current) {
-                socketRef.current.emit(ACTIONS.CODE_CHANGE, {
-                    roomId,
-                    code,
-                });
-            }
+        // 3. Set this user's awareness info (shown as cursor label)
+        provider.awareness.setLocalStateField('user', {
+            name: username,
+            color: getRandomColor(),
         });
 
+        // 4. The shared text that all users edit together
+        const ytext = ydoc.getText('codemirror');
+
+        // 5. Init CodeMirror
+        editorRef.current = Codemirror.fromTextArea(textareaRef.current, {
+            mode: { name: 'javascript', json: true },
+            theme: 'dracula',
+            autoCloseTags: true,
+            autoCloseBrackets: true,
+            lineNumbers: true,
+        });
+
+        // 6. Bind Yjs ↔ CodeMirror.
+        //    This single binding handles ALL of:
+        //    - syncing content between users (CRDT, no conflicts)
+        //    - showing remote cursors with name labels
+        //    - syncing state to new joiners automatically
+        const binding = new CodemirrorBinding(
+            ytext,
+            editorRef.current,
+            provider.awareness
+        );
+
+        // 7. Keep onCodeChange updated so EditorPage's codeRef stays in sync
+        editorRef.current.on('change', (instance) => {
+            onCodeChange(instance.getValue());
+        });
+
+        // Cleanup on unmount
         return () => {
+            binding.destroy();
+            provider.destroy();
+            ydoc.destroy();
             if (editorRef.current) {
                 editorRef.current.toTextArea();
                 editorRef.current = null;
             }
         };
     }, []);
-
-    // Effect 2: Set up the incoming CODE_CHANGE listener as soon as socket is ready.
-    // This runs whenever socketRef.current changes, ensuring the listener is registered
-    // before the server sends the SYNC_CODE payload to the new joiner.
-    useEffect(() => {
-        if (!socketRef.current) return;
-
-        const handleCodeChange = ({ code }) => {
-            if (code !== null && editorRef.current) {
-                const currentCode = editorRef.current.getValue();
-
-                // Prevent unnecessary overwrite and cursor jumps
-                if (currentCode === code) return;
-
-                const cursor = editorRef.current.getCursor();
-                editorRef.current.setValue(code);
-                editorRef.current.setCursor(cursor);
-            }
-        };
-
-        socketRef.current.on(ACTIONS.CODE_CHANGE, handleCodeChange);
-
-        return () => {
-            if (socketRef.current) {
-                socketRef.current.off(ACTIONS.CODE_CHANGE, handleCodeChange);
-            }
-        };
-    }, [socketRef.current]); // re-runs when socket becomes available
 
     return <textarea ref={textareaRef}></textarea>;
 };

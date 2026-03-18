@@ -6,75 +6,58 @@ import Editor from '../components/editor.js';
 import { initSocket } from '../socket.js';
 import { useLocation, useNavigate, Navigate, useParams } from 'react-router-dom';
 
-
-const EditorPage = ()=>{
+const EditorPage = () => {
     const socketRef = useRef(null);
     const codeRef = useRef(null);
     const location = useLocation();
-    const {roomId} = useParams();
-    
-    const reactNavigator = useNavigate();  //to not get error i'm giving a diff name other than navigate
-    
-    // change of useState => will re-render but change of useRef will not re-render 
+    const { roomId } = useParams();
+
+    const reactNavigator = useNavigate();
     const [clients, setClients] = useState([]);
     const isInitialized = useRef(false);
 
-    useEffect(()=>{
+    useEffect(() => {
         if (isInitialized.current) return;
         isInitialized.current = true;
 
         let socket;
 
-        const init = async () =>{
-
-            // below code to connect client to server
-            // socketRef.current = await initSocket();
+        const init = async () => {
             socket = await initSocket();
             socketRef.current = socket;
             socket.on('connect_error', handleErrors);
             socket.on('connect_failed', handleErrors);
 
-
             function handleErrors(e) {
                 console.log('socket error', e);
                 toast.error('Socket connection failed, try again later.');
-                reactNavigator('/');  //redirect to homepage
+                reactNavigator('/');
             }
 
-            // here we are able to use await because in socket.js, we written async func, so it returns promise function
-            // below code to send username to editorpage
             socket.emit(ACTIONS.JOIN, {
                 roomId,
                 username: location.state?.username,
             });
 
-            // Listening for joined event
-            socket.on(ACTIONS.JOINED, ({clients, username, socketId}) => {
-                if(username!== location.state?.username){
-                    // notify others except current user(me)
+            socket.on(ACTIONS.JOINED, ({ clients, username, socketId }) => {
+                if (username !== location.state?.username) {
                     toast.success(`${username} Joined the room..`);
-                    console.log(`${username} joined`); 
+                    console.log(`${username} joined`);
                 }
                 setClients(clients);
-                socket.emit(ACTIONS.SYNC_CODE, {
-                    code: codeRef.current,
-                    socketId,
-                });
+                // SYNC_CODE removed — Yjs handles new joiner sync automatically
             });
 
-            // Listening for disconnected
-            socket.on(ACTIONS.DISCONNECTED, ({socketId, username})=>{
+            socket.on(ACTIONS.DISCONNECTED, ({ socketId, username }) => {
                 toast.success(`${username} left the room.`);
-                setClients(prev => prev.filter(
-                        client => client.socketId !== socketId
-                    )
+                setClients(prev =>
+                    prev.filter(client => client.socketId !== socketId)
                 );
             });
         };
 
         init();
 
-        // Important Cleanup
         return () => {
             if (socket) {
                 socket.off(ACTIONS.JOINED);
@@ -82,8 +65,7 @@ const EditorPage = ()=>{
                 socket.disconnect();
             }
         };
-
-    },[]);  //if we didn't give [] then it will call for everything
+    }, []);
 
     async function copyRoomId() {
         try {
@@ -96,9 +78,7 @@ const EditorPage = ()=>{
     }
 
     function leaveRoom() {
-        // Explicitly tell the server this user is leaving
-        // so others get the toast BEFORE the socker disconnects
-        if(socketRef.current){
+        if (socketRef.current) {
             socketRef.current.emit(ACTIONS.LEAVE, {
                 roomId,
                 username: location.state?.username,
@@ -107,8 +87,8 @@ const EditorPage = ()=>{
         reactNavigator('/');
     }
 
-    if(!location.state){
-        return <Navigate to="/"/>
+    if (!location.state) {
+        return <Navigate to="/" />;
     }
 
     return (
@@ -116,20 +96,19 @@ const EditorPage = ()=>{
             <div className='aside'>
                 <div className='asideInner'>
                     <div className='logo'>
-                        <img 
-                            className='logoImage' 
-                            src='/code-sync.png' 
+                        <img
+                            className='logoImage'
+                            src='/code-sync.png'
                             alt='logo'
                         />
                     </div>
                     <h3>Connected</h3>
                     <div className='clientsList'>
-                        {
-                            clients.map((client) =>(
-                                <Client 
-                                    key={client.socketId} 
-                                    username={client.username} 
-                                />
+                        {clients.map((client) => (
+                            <Client
+                                key={client.socketId}
+                                username={client.username}
+                            />
                         ))}
                     </div>
                 </div>
@@ -137,9 +116,11 @@ const EditorPage = ()=>{
                 <button className='btn leaveBtn' onClick={leaveRoom}>Leave</button>
             </div>
             <div className='editorWrap'>
-                <Editor 
+                {/* Pass username so Yjs can label this user's cursor */}
+                <Editor
                     socketRef={socketRef}
                     roomId={roomId}
+                    username={location.state?.username}
                     onCodeChange={(code) => {
                         codeRef.current = code;
                     }}
